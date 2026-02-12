@@ -1,0 +1,183 @@
+-- Claude Usage Widget
+-- ~/.claude-usage.json 파일을 읽어서 화면에 표시
+-- 2개 위젯: current (왼쪽), weekly (오른쪽)
+
+local M = {}
+
+local canvasCurrent = nil
+local canvasWeekly = nil
+local updateTimer = nil
+local JSON_PATH = os.getenv("HOME") .. "/.claude-usage.json"
+
+-- JSON 파일 읽기
+local function readJSON()
+    local file = io.open(JSON_PATH, "r")
+    if not file then
+        return nil
+    end
+    local content = file:read("*all")
+    file:close()
+
+    local ok, data = pcall(hs.json.decode, content)
+    if ok and data then
+        return data
+    end
+    return nil
+end
+
+-- 단일 위젯 생성
+local function createSingleWidget(x, y, width, height, label)
+    local canvas = hs.canvas.new({x = x, y = y, w = width, h = height})
+
+    -- 배경 (finger-gym과 동일)
+    canvas[1] = {
+        type = "rectangle",
+        fillColor = {red = 0.1, green = 0.1, blue = 0.1, alpha = 0.7},
+    }
+
+    -- 라벨 (상단, 작은 글씨)
+    canvas[2] = {
+        type = "text",
+        text = label,
+        textFont = "Menlo",
+        textSize = 12,
+        textColor = {red = 0.3, green = 0.9, blue = 0.4, alpha = 1},
+        textAlignment = "center",
+        frame = {x = 0, y = 5, w = width, h = 16}
+    }
+
+    -- 값 (하단)
+    canvas[3] = {
+        type = "text",
+        text = "--% (--)",
+        textFont = "Menlo",
+        textSize = 16,
+        textColor = {red = 0.3, green = 0.9, blue = 0.4, alpha = 1},
+        textAlignment = "center",
+        frame = {x = 0, y = 24, w = width, h = 24}
+    }
+
+    canvas:level(hs.canvas.windowLevels.overlay)
+    canvas:behavior(hs.canvas.windowBehaviors.canJoinAllSpaces)
+
+    return canvas
+end
+
+-- 위젯 생성
+local function createWidgets()
+    local screen = hs.screen.primaryScreen()
+    local frame = screen:frame()
+
+    local width = 150
+    local height = 50
+    local padding = 20
+    local gap = 10
+
+    local y = frame.y + frame.h - height - padding
+
+    -- current: 모니터 왼쪽 하단
+    local currentX = frame.x + padding
+    canvasCurrent = createSingleWidget(currentX, y, width, height, "current")
+
+    -- weekly: current 오른쪽
+    local weeklyX = currentX + width + gap
+    canvasWeekly = createSingleWidget(weeklyX, y, width, height, "weekly")
+
+    return canvasCurrent, canvasWeekly
+end
+
+-- 색상
+local colorNormal = {red = 0.3, green = 0.9, blue = 0.4, alpha = 1}
+local colorError = {red = 0.9, green = 0.3, blue = 0.3, alpha = 1}
+
+-- 위젯 업데이트
+local function updateWidget()
+    if not canvasCurrent or not canvasWeekly then return end
+
+    local data = readJSON()
+
+    if data and not data.error then
+        local sp = data.sessionPercent or 0
+        local wp = data.weeklyPercent or 0
+        local sr = data.sessionReset or "--"
+        local wr = data.weeklyReset or "--"
+
+        -- 남은 퍼센트 계산
+        local remainSession = 100 - sp
+        local remainWeekly = 100 - wp
+
+        -- 시간 축약 (3 hr 19 min -> 3h19m)
+        sr = sr:gsub(" hr ", "h"):gsub(" min", "m")
+        wr = wr:gsub(" hr ", "h"):gsub(" min", "m")
+
+        canvasCurrent[3].text = string.format("%d%% (%s)", remainSession, sr)
+        canvasCurrent[3].textColor = colorNormal
+
+        canvasWeekly[3].text = string.format("%d%% (%s)", remainWeekly, wr)
+        canvasWeekly[3].textColor = colorNormal
+    else
+        -- 에러 표시
+        local errMsg = "no data"
+        if data and data.error then
+            if data.error:find("Safari not running") then
+                errMsg = "Safari off"
+            elseif data.error:find("Wrong page") then
+                errMsg = "wrong page"
+            else
+                errMsg = "error"
+            end
+        end
+
+        canvasCurrent[3].text = errMsg
+        canvasCurrent[3].textColor = colorError
+
+        canvasWeekly[3].text = errMsg
+        canvasWeekly[3].textColor = colorError
+    end
+end
+
+-- 시작
+function M.start()
+    if canvasCurrent then
+        canvasCurrent:delete()
+    end
+    if canvasWeekly then
+        canvasWeekly:delete()
+    end
+
+    createWidgets()
+    canvasCurrent:show()
+    canvasWeekly:show()
+
+    updateWidget()
+
+    if updateTimer then
+        updateTimer:stop()
+    end
+    updateTimer = hs.timer.doEvery(60, updateWidget)
+end
+
+-- 중지
+function M.stop()
+    if updateTimer then
+        updateTimer:stop()
+        updateTimer = nil
+    end
+    if canvasCurrent then
+        canvasCurrent:hide()
+    end
+    if canvasWeekly then
+        canvasWeekly:hide()
+    end
+end
+
+-- 토글
+function M.toggle()
+    if canvasCurrent and canvasCurrent:isShowing() then
+        M.stop()
+    else
+        M.start()
+    end
+end
+
+return M
