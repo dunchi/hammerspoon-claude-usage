@@ -7,14 +7,7 @@ local M = {}
 local canvasCurrent = nil
 local canvasWeekly = nil
 local updateTimer = nil
-local fetchTimer = nil
 local JSON_PATH = os.getenv("HOME") .. "/.claude-usage.json"
-local SCRIPT_PATH = os.getenv("HOME") .. "/.local/bin/claude-usage.sh"
-
--- 사용량 데이터 가져오기 (sh 스크립트 실행)
-local function fetchUsage()
-    hs.task.new(SCRIPT_PATH, nil):start()
-end
 
 -- JSON 파일 읽기
 local function readJSON()
@@ -114,7 +107,9 @@ local function updateWidget()
         local remainSession = 100 - sp
         local remainWeekly = 100 - wp
 
-        -- 시간은 이미 "3hr 19min" 형식으로 전달됨
+        -- 시간 축약 (3 hr 19 min -> 3h19m)
+        sr = sr:gsub(" hr ", "h"):gsub(" min", "m")
+        wr = wr:gsub(" hr ", "h"):gsub(" min", "m")
 
         canvasCurrent[3].text = string.format("%d%% (%s)", remainSession, sr)
         canvasCurrent[3].textColor = colorNormal
@@ -127,7 +122,7 @@ local function updateWidget()
         local errColor = colorLoading
 
         if data and data.error then
-            if data.error:find("Session starting") or data.error:find("wait") then
+            if data.error:find("Opening page") then
                 errMsg = "loading..."
                 errColor = colorLoading
             else
@@ -162,9 +157,6 @@ function M.start()
         canvasWeekly:delete()
     end
 
-    -- 이전 데이터 삭제 (loading 상태로 시작)
-    os.remove(JSON_PATH)
-
     createWidgets()
     canvasCurrent:show()
     canvasWeekly:show()
@@ -175,13 +167,6 @@ function M.start()
         updateTimer:stop()
     end
     updateTimer = hs.timer.doEvery(10, updateWidget)
-
-    -- 데이터 수집 타이머 (30초마다)
-    if fetchTimer then
-        fetchTimer:stop()
-    end
-    fetchUsage()  -- 즉시 한번 실행
-    fetchTimer = hs.timer.doEvery(30, fetchUsage)
 end
 
 -- 중지
@@ -189,10 +174,6 @@ function M.stop()
     if updateTimer then
         updateTimer:stop()
         updateTimer = nil
-    end
-    if fetchTimer then
-        fetchTimer:stop()
-        fetchTimer = nil
     end
     if canvasCurrent then
         canvasCurrent:hide()

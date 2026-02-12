@@ -1,236 +1,86 @@
 #!/bin/bash
 
-# Claude Usage Fetcher (tmux 기반)
-# tmux 세션에서 claude /usage 명령어로 사용량 조회
-
-# LaunchAgent 환경용 PATH 설정
-export PATH="/opt/homebrew/bin:/Users/hanju/.local/bin:$PATH"
+# Claude Usage Fetcher
+# Safari에서 claude.ai/settings/usage 데이터를 추출하여 JSON으로 저장
 
 OUTPUT_FILE="$HOME/.claude-usage.json"
-SESSION_NAME="claude-usage"
+TARGET_URL="https://claude.ai/settings/usage"
 
-# tmux 세션 확인 및 생성
-ensure_session() {
-    if ! tmux has-session -t "$SESSION_NAME" 2>/dev/null; then
-        # 세션 생성 및 claude 실행
-        tmux new-session -d -s "$SESSION_NAME" -x 120 -y 30
-        tmux send-keys -t "$SESSION_NAME" "cd ~ && claude" Enter
+# Safari에서 데이터 추출 (백그라운드 탭 지원, 자동 열기)
+DATA=$(osascript <<'APPLESCRIPT'
+tell application "Safari"
+    set targetURL to "claude.ai/settings/usage"
+    set foundTab to missing value
+    set foundWindow to missing value
 
-        # claude 시작 대기 (trust 확인 포함)
-        sleep 5
-        tmux send-keys -t "$SESSION_NAME" Enter  # trust 확인
-        sleep 5
+    -- 모든 윈도우의 모든 탭에서 usage 페이지 찾기
+    repeat with w in windows
+        repeat with t in tabs of w
+            if URL of t contains targetURL then
+                set foundTab to t
+                set foundWindow to w
+                exit repeat
+            end if
+        end repeat
+        if foundTab is not missing value then exit repeat
+    end repeat
 
-        echo '{"error": "Session starting, wait..."}' > "$OUTPUT_FILE"
-        exit 0
-    fi
-}
+    -- 페이지를 찾지 못하면 새 탭에서 열기
+    if foundTab is missing value then
+        -- Safari가 열려있지 않으면 백그라운드에서 실행
+        if not running then
+            launch
+            delay 1
+        end if
 
-# /usage 실행 및 결과 캡처
-get_usage() {
-    # 입력 초기화
-    tmux send-keys -t "$SESSION_NAME" C-c
-    sleep 1
+        -- 새 탭에서 usage 페이지 열기
+        if (count of windows) = 0 then
+            make new document with properties {URL:"https://claude.ai/settings/usage"}
+            delay 3
+        else
+            tell front window
+                set newTab to make new tab with properties {URL:"https://claude.ai/settings/usage"}
+                delay 3
+            end tell
+        end if
 
-    # /usage 명령어 전송 (자동완성 메뉴 표시)
-    tmux send-keys -t "$SESSION_NAME" "/usage" Enter
-    sleep 1
+        -- Safari 숨기기
+        set visible to false
 
-    # 자동완성 선택 (다이얼로그 열기)
-    tmux send-keys -t "$SESSION_NAME" Enter
-    sleep 2
+        return "{\"error\": \"Opening page, wait...\"}"
+    end if
 
-    # 화면 캡처 (다이얼로그가 열린 상태)
-    local output
-    output=$(tmux capture-pane -t "$SESSION_NAME" -p)
+    -- 찾은 탭에서 JavaScript 실행
+    try
+        set jsResult to do JavaScript "
+(function() {
+    var data = {};
+    var text = document.body.innerText;
 
-    # ESC로 닫기
-    tmux send-keys -t "$SESSION_NAME" Escape
+    var sessionMatch = text.match(/Current session[\\s\\S]*?(\\d+)% used/);
+    if (sessionMatch) data.sessionPercent = parseInt(sessionMatch[1]);
 
-    echo "$output"
-}
+    var allModelsMatch = text.match(/All models[\\s\\S]*?(\\d+)% used/);
+    if (allModelsMatch) data.weeklyPercent = parseInt(allModelsMatch[1]);
 
-# 12시간 형식을 24시간으로 변환 (예: "10:59pm" -> "22:59")
-convert_to_24h() {
-    local time_12="$1"
-    local hour min ampm
+    var resetSession = text.match(/Current session[\\s\\S]*?Resets in ([0-9]+ hr [0-9]+ min|[0-9]+ hr|[0-9]+ min)/);
+    if (resetSession) data.sessionReset = resetSession[1];
 
-    if [[ "$time_12" =~ ^([0-9]+):([0-9]+)(am|pm)$ ]]; then
-        hour="${BASH_REMATCH[1]}"
-        min="${BASH_REMATCH[2]}"
-        ampm="${BASH_REMATCH[3]}"
-    elif [[ "$time_12" =~ ^([0-9]+)(am|pm)$ ]]; then
-        hour="${BASH_REMATCH[1]}"
-        min="00"
-        ampm="${BASH_REMATCH[2]}"
-    else
-        echo ""
-        return
-    fi
+    var resetAllModels = text.match(/All models[\\s\\S]*?Resets in ([0-9]+ hr [0-9]+ min|[0-9]+ hr|[0-9]+ min)/);
+    if (resetAllModels) data.weeklyReset = resetAllModels[1];
 
-    # 12시간 -> 24시간 변환
-    if [[ "$ampm" == "pm" && "$hour" -ne 12 ]]; then
-        hour=$((hour + 12))
-    elif [[ "$ampm" == "am" && "$hour" -eq 12 ]]; then
-        hour=0
-    fi
+    data.timestamp = new Date().toISOString();
+    return JSON.stringify(data);
+})();
+" in foundTab
 
-    printf "%02d:%02d" "$hour" "$min"
-}
+        return jsResult
+    on error errMsg
+        return "{\"error\": \"" & errMsg & "\"}"
+    end try
+end tell
+APPLESCRIPT
+)
 
-# 시간 문자열을 남은 시간으로 변환
-# 입력 형식: "10:59pm (Asia/Seoul)" 또는 "Feb 19 at 6:59pm (Asia/Seoul)"
-# 출력 형식: "3h 49m" (24시간 미만) 또는 "6d 23h" (1일 이상)
-calc_remaining() {
-    local reset_str="$1"
-
-    # 현재 시간 (초 단위)
-    local now_sec
-    now_sec=$(date +%s)
-
-    local reset_sec=""
-
-    # 날짜가 포함된 형식인지 확인 (Feb 19 at 6:59pm)
-    if echo "$reset_str" | grep -qE "[A-Za-z]+ [0-9]+ at"; then
-        # grep으로 파싱
-        local month_name month_num day time_12 hour min ampm
-        month_name=$(echo "$reset_str" | grep -oE "^[A-Za-z]+" | head -1)
-        day=$(echo "$reset_str" | grep -oE "[A-Za-z]+ ([0-9]+) at" | grep -oE "[0-9]+")
-        time_12=$(echo "$reset_str" | grep -oE "[0-9]+:?[0-9]*[ap]m" | head -1)
-
-        if [[ -z "$month_name" || -z "$day" || -z "$time_12" ]]; then
-            echo "--"
-            return
-        fi
-
-        # 월 이름을 숫자로 변환
-        case "$month_name" in
-            Jan) month_num=01 ;; Feb) month_num=02 ;; Mar) month_num=03 ;;
-            Apr) month_num=04 ;; May) month_num=05 ;; Jun) month_num=06 ;;
-            Jul) month_num=07 ;; Aug) month_num=08 ;; Sep) month_num=09 ;;
-            Oct) month_num=10 ;; Nov) month_num=11 ;; Dec) month_num=12 ;;
-            *) echo "--"; return ;;
-        esac
-
-        # 시간 파싱 (sed 사용)
-        hour=$(echo "$time_12" | sed -E 's/^([0-9]+):?[0-9]*(am|pm)$/\1/')
-        min=$(echo "$time_12" | sed -E 's/^[0-9]+:([0-9]+)(am|pm)$/\1/')
-        ampm=$(echo "$time_12" | sed -E 's/^[0-9]+:?[0-9]*(am|pm)$/\1/')
-
-        # 분이 없으면 00
-        if [[ "$min" == "$time_12" ]]; then
-            min="00"
-        fi
-
-        if [[ -z "$hour" || -z "$ampm" ]]; then
-            echo "--"
-            return
-        fi
-
-        # 12시간 -> 24시간 변환
-        if [[ "$ampm" == "pm" && "$hour" -ne 12 ]]; then
-            hour=$((hour + 12))
-        elif [[ "$ampm" == "am" && "$hour" -eq 12 ]]; then
-            hour=0
-        fi
-
-        # 현재 연도
-        local year
-        year=$(date +%Y)
-
-        # 리셋 시간 파싱 (MM/dd/YYYY HH:MM 형식 사용)
-        reset_sec=$(date -j -f "%m/%d/%Y %H:%M" "$month_num/$day/$year $(printf "%02d" "$hour"):$(printf "%02d" "$min")" +%s 2>/dev/null)
-
-        # 리셋이 과거면 내년으로
-        if [[ -n "$reset_sec" && $reset_sec -le $now_sec ]]; then
-            year=$((year + 1))
-            reset_sec=$(date -j -f "%m/%d/%Y %H:%M" "$month_num/$day/$year $(printf "%02d" "$hour"):$(printf "%02d" "$min")" +%s 2>/dev/null)
-        fi
-    else
-        # 시간만 있는 형식 (10:59pm)
-        local time_12
-        time_12=$(echo "$reset_str" | grep -oE "[0-9]+:?[0-9]*[ap]m" | head -1)
-
-        if [[ -z "$time_12" ]]; then
-            echo "--"
-            return
-        fi
-
-        # 24시간 형식으로 변환
-        local time_24
-        time_24=$(convert_to_24h "$time_12")
-
-        if [[ -z "$time_24" ]]; then
-            echo "--"
-            return
-        fi
-
-        # 리셋 시간 파싱
-        reset_sec=$(date -j -f "%H:%M" "$time_24" +%s 2>/dev/null)
-
-        # 리셋이 과거면 내일로
-        if [[ -n "$reset_sec" && $reset_sec -le $now_sec ]]; then
-            reset_sec=$((reset_sec + 86400))
-        fi
-    fi
-
-    if [[ -z "$reset_sec" ]]; then
-        echo "--"
-        return
-    fi
-
-    # 남은 시간 계산
-    local diff=$((reset_sec - now_sec))
-    local days=$((diff / 86400))
-    local hours=$(((diff % 86400) / 3600))
-    local mins=$(((diff % 3600) / 60))
-
-    # 1일 이상이면 "Xd Xh", 아니면 "Xh Xm"
-    if [[ $days -ge 1 ]]; then
-        echo "${days}d ${hours}h"
-    else
-        echo "${hours}h ${mins}m"
-    fi
-}
-
-# 출력 파싱
-parse_usage() {
-    local output="$1"
-
-    # Current session 퍼센트 추출
-    local session_percent
-    session_percent=$(echo "$output" | grep -A1 "Current session" | grep -oE "[0-9]+% used" | grep -oE "[0-9]+")
-
-    # Current week (all models) 퍼센트 추출
-    local weekly_percent
-    weekly_percent=$(echo "$output" | grep -A1 "Current week (all models)" | grep -oE "[0-9]+% used" | grep -oE "[0-9]+")
-
-    # 리셋 시간 추출
-    local session_reset_raw
-    session_reset_raw=$(echo "$output" | grep -A2 "Current session" | grep "Resets" | sed 's/.*Resets //' | tr -d '\n')
-
-    local weekly_reset_raw
-    weekly_reset_raw=$(echo "$output" | grep -A2 "Current week (all models)" | grep "Resets" | sed 's/.*Resets //' | tr -d '\n')
-
-    # 남은 시간으로 변환
-    local session_reset
-    session_reset=$(calc_remaining "$session_reset_raw")
-
-    local weekly_reset
-    weekly_reset=$(calc_remaining "$weekly_reset_raw")
-
-    # JSON 생성
-    if [[ -n "$session_percent" && -n "$weekly_percent" ]]; then
-        cat << EOF
-{"sessionPercent":$session_percent,"weeklyPercent":$weekly_percent,"sessionReset":"$session_reset","weeklyReset":"$weekly_reset","timestamp":"$(date -u +%Y-%m-%dT%H:%M:%S.000Z)"}
-EOF
-    else
-        echo '{"error": "Parse failed"}'
-    fi
-}
-
-# 메인
-ensure_session
-output=$(get_usage)
-result=$(parse_usage "$output")
-echo "$result" > "$OUTPUT_FILE"
+# 결과 저장
+echo "$DATA" > "$OUTPUT_FILE"
