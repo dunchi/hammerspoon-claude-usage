@@ -75,13 +75,13 @@ local function createWidgets()
 
     local y = frame.y + frame.h - height - padding
 
-    -- current: 모니터 왼쪽 하단
-    local currentX = frame.x + padding
-    canvasCurrent = createSingleWidget(currentX, y, width, height, "current")
-
-    -- weekly: current 오른쪽
-    local weeklyX = currentX + width + gap
+    -- weekly: 오른쪽 하단
+    local weeklyX = frame.x + frame.w - width - padding
     canvasWeekly = createSingleWidget(weeklyX, y, width, height, "weekly")
+
+    -- current: weekly 왼쪽
+    local currentX = weeklyX - width - gap
+    canvasCurrent = createSingleWidget(currentX, y, width, height, "current")
 
     return canvasCurrent, canvasWeekly
 end
