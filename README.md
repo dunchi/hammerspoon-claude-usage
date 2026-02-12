@@ -26,6 +26,11 @@ macOS에서 Claude 사용량을 실시간으로 모니터링하는 Hammerspoon �
 - Safari
 - Claude Pro 계정 (claude.ai 로그인 필요)
 
+## LLM으로 설치하기
+
+AI/LLM을 이용해서 설치하려면 [guide-for-llm.md](./guide-for-llm.md) 파일을 읽게 하세요.
+새 맥북에 처음부터 설치하는 전체 과정이 포함되어 있습니다.
+
 ## 설치
 
 ### 1. Safari 설정
