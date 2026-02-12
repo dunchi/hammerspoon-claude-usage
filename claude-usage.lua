@@ -119,7 +119,9 @@ local function updateWidget()
         -- 에러 표시
         local errMsg = "no data"
         if data and data.error then
-            if data.error:find("Safari not running") then
+            if data.error:find("Opening page") then
+                errMsg = "loading..."
+            elseif data.error:find("Safari not running") then
                 errMsg = "Safari off"
             elseif data.error:find("Wrong page") then
                 errMsg = "wrong page"
@@ -154,7 +156,7 @@ function M.start()
     if updateTimer then
         updateTimer:stop()
     end
-    updateTimer = hs.timer.doEvery(60, updateWidget)
+    updateTimer = hs.timer.doEvery(10, updateWidget)
 end
 
 -- 중지
