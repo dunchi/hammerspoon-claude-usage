@@ -162,6 +162,9 @@ function M.start()
         canvasWeekly:delete()
     end
 
+    -- 이전 데이터 삭제 (loading 상태로 시작)
+    os.remove(JSON_PATH)
+
     createWidgets()
     canvasCurrent:show()
     canvasWeekly:show()
