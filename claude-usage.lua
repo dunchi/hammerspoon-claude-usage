@@ -7,7 +7,14 @@ local M = {}
 local canvasCurrent = nil
 local canvasWeekly = nil
 local updateTimer = nil
+local fetchTimer = nil
 local JSON_PATH = os.getenv("HOME") .. "/.claude-usage.json"
+local SCRIPT_PATH = os.getenv("HOME") .. "/.local/bin/claude-usage.sh"
+
+-- 사용량 데이터 가져오기 (sh 스크립트 실행)
+local function fetchUsage()
+    hs.task.new(SCRIPT_PATH, nil):start()
+end
 
 -- JSON 파일 읽기
 local function readJSON()
@@ -166,14 +173,12 @@ function M.start()
     end
     updateTimer = hs.timer.doEvery(10, updateWidget)
 
-    -- tmux 세션 터미널에서 열기 (새 창 하나만)
-    hs.osascript.applescript([[
-        tell application "Terminal"
-            activate
-            delay 0.5
-            do script "tmux attach -t claude-usage 2>/dev/null || echo 'tmux 세션 없음'" in front window
-        end tell
-    ]])
+    -- 데이터 수집 타이머 (30초마다)
+    if fetchTimer then
+        fetchTimer:stop()
+    end
+    fetchUsage()  -- 즉시 한번 실행
+    fetchTimer = hs.timer.doEvery(30, fetchUsage)
 end
 
 -- 중지
@@ -181,6 +186,10 @@ function M.stop()
     if updateTimer then
         updateTimer:stop()
         updateTimer = nil
+    end
+    if fetchTimer then
+        fetchTimer:stop()
+        fetchTimer = nil
     end
     if canvasCurrent then
         canvasCurrent:hide()
