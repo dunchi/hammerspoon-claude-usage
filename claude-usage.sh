@@ -78,52 +78,119 @@ convert_to_24h() {
     printf "%02d:%02d" "$hour" "$min"
 }
 
-# 시간 문자열을 남은 시간으로 변환 (예: "10:59pm (Asia/Seoul)" -> "3hr 19min")
+# 시간 문자열을 남은 시간으로 변환
+# 입력 형식: "10:59pm (Asia/Seoul)" 또는 "Feb 19 at 6:59pm (Asia/Seoul)"
+# 출력 형식: "3h 49m" (24시간 미만) 또는 "6d 23h" (1일 이상)
 calc_remaining() {
     local reset_str="$1"
-
-    # 시간 추출 (예: "10:59pm" 또는 "11pm")
-    local time_12
-    time_12=$(echo "$reset_str" | grep -oE "[0-9]+:?[0-9]*[ap]m" | head -1)
-
-    if [[ -z "$time_12" ]]; then
-        echo "--"
-        return
-    fi
-
-    # 24시간 형식으로 변환
-    local time_24
-    time_24=$(convert_to_24h "$time_12")
-
-    if [[ -z "$time_24" ]]; then
-        echo "--"
-        return
-    fi
 
     # 현재 시간 (초 단위)
     local now_sec
     now_sec=$(date +%s)
 
-    # 리셋 시간 파싱
-    local reset_sec
-    reset_sec=$(date -j -f "%H:%M" "$time_24" +%s 2>/dev/null)
+    local reset_sec=""
+
+    # 날짜가 포함된 형식인지 확인 (Feb 19 at 6:59pm)
+    if echo "$reset_str" | grep -qE "[A-Za-z]+ [0-9]+ at"; then
+        # grep으로 파싱
+        local month_name month_num day time_12 hour min ampm
+        month_name=$(echo "$reset_str" | grep -oE "^[A-Za-z]+" | head -1)
+        day=$(echo "$reset_str" | grep -oE "[A-Za-z]+ ([0-9]+) at" | grep -oE "[0-9]+")
+        time_12=$(echo "$reset_str" | grep -oE "[0-9]+:?[0-9]*[ap]m" | head -1)
+
+        if [[ -z "$month_name" || -z "$day" || -z "$time_12" ]]; then
+            echo "--"
+            return
+        fi
+
+        # 월 이름을 숫자로 변환
+        case "$month_name" in
+            Jan) month_num=01 ;; Feb) month_num=02 ;; Mar) month_num=03 ;;
+            Apr) month_num=04 ;; May) month_num=05 ;; Jun) month_num=06 ;;
+            Jul) month_num=07 ;; Aug) month_num=08 ;; Sep) month_num=09 ;;
+            Oct) month_num=10 ;; Nov) month_num=11 ;; Dec) month_num=12 ;;
+            *) echo "--"; return ;;
+        esac
+
+        # 시간 파싱 (sed 사용)
+        hour=$(echo "$time_12" | sed -E 's/^([0-9]+):?[0-9]*(am|pm)$/\1/')
+        min=$(echo "$time_12" | sed -E 's/^[0-9]+:([0-9]+)(am|pm)$/\1/')
+        ampm=$(echo "$time_12" | sed -E 's/^[0-9]+:?[0-9]*(am|pm)$/\1/')
+
+        # 분이 없으면 00
+        if [[ "$min" == "$time_12" ]]; then
+            min="00"
+        fi
+
+        if [[ -z "$hour" || -z "$ampm" ]]; then
+            echo "--"
+            return
+        fi
+
+        # 12시간 -> 24시간 변환
+        if [[ "$ampm" == "pm" && "$hour" -ne 12 ]]; then
+            hour=$((hour + 12))
+        elif [[ "$ampm" == "am" && "$hour" -eq 12 ]]; then
+            hour=0
+        fi
+
+        # 현재 연도
+        local year
+        year=$(date +%Y)
+
+        # 리셋 시간 파싱 (MM/dd/YYYY HH:MM 형식 사용)
+        reset_sec=$(date -j -f "%m/%d/%Y %H:%M" "$month_num/$day/$year $(printf "%02d" "$hour"):$(printf "%02d" "$min")" +%s 2>/dev/null)
+
+        # 리셋이 과거면 내년으로
+        if [[ -n "$reset_sec" && $reset_sec -le $now_sec ]]; then
+            year=$((year + 1))
+            reset_sec=$(date -j -f "%m/%d/%Y %H:%M" "$month_num/$day/$year $(printf "%02d" "$hour"):$(printf "%02d" "$min")" +%s 2>/dev/null)
+        fi
+    else
+        # 시간만 있는 형식 (10:59pm)
+        local time_12
+        time_12=$(echo "$reset_str" | grep -oE "[0-9]+:?[0-9]*[ap]m" | head -1)
+
+        if [[ -z "$time_12" ]]; then
+            echo "--"
+            return
+        fi
+
+        # 24시간 형식으로 변환
+        local time_24
+        time_24=$(convert_to_24h "$time_12")
+
+        if [[ -z "$time_24" ]]; then
+            echo "--"
+            return
+        fi
+
+        # 리셋 시간 파싱
+        reset_sec=$(date -j -f "%H:%M" "$time_24" +%s 2>/dev/null)
+
+        # 리셋이 과거면 내일로
+        if [[ -n "$reset_sec" && $reset_sec -le $now_sec ]]; then
+            reset_sec=$((reset_sec + 86400))
+        fi
+    fi
 
     if [[ -z "$reset_sec" ]]; then
         echo "--"
         return
     fi
 
-    # 리셋이 과거면 내일로
-    if [[ $reset_sec -le $now_sec ]]; then
-        reset_sec=$((reset_sec + 86400))
-    fi
-
     # 남은 시간 계산
     local diff=$((reset_sec - now_sec))
-    local hours=$((diff / 3600))
+    local days=$((diff / 86400))
+    local hours=$(((diff % 86400) / 3600))
     local mins=$(((diff % 3600) / 60))
 
-    echo "${hours}h ${mins}m"
+    # 1일 이상이면 "Xd Xh", 아니면 "Xh Xm"
+    if [[ $days -ge 1 ]]; then
+        echo "${days}d ${hours}h"
+    else
+        echo "${hours}h ${mins}m"
+    fi
 }
 
 # 출력 파싱
