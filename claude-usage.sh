@@ -27,9 +27,9 @@ tell application "Safari"
 
     -- 페이지를 찾지 못하면 새 탭에서 열기
     if foundTab is missing value then
-        -- Safari가 열려있지 않으면 실행
+        -- Safari가 열려있지 않으면 백그라운드에서 실행
         if not running then
-            activate
+            launch
             delay 1
         end if
 
@@ -43,6 +43,9 @@ tell application "Safari"
                 delay 3
             end tell
         end if
+
+        -- Safari 숨기기
+        set visible to false
 
         return "{\"error\": \"Opening page, wait...\"}"
     end if

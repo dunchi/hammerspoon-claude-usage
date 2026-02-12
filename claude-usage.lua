@@ -88,6 +88,7 @@ end
 
 -- 색상
 local colorNormal = {red = 0.3, green = 0.9, blue = 0.4, alpha = 1}
+local colorLoading = {red = 1.0, green = 0.6, blue = 0.0, alpha = 1}
 local colorError = {red = 0.9, green = 0.3, blue = 0.3, alpha = 1}
 
 -- 위젯 업데이트
@@ -96,9 +97,9 @@ local function updateWidget()
 
     local data = readJSON()
 
-    if data and not data.error then
-        local sp = data.sessionPercent or 0
-        local wp = data.weeklyPercent or 0
+    if data and not data.error and data.sessionPercent and data.weeklyPercent then
+        local sp = data.sessionPercent
+        local wp = data.weeklyPercent
         local sr = data.sessionReset or "--"
         local wr = data.weeklyReset or "--"
 
@@ -116,25 +117,34 @@ local function updateWidget()
         canvasWeekly[3].text = string.format("%d%% (%s)", remainWeekly, wr)
         canvasWeekly[3].textColor = colorNormal
     else
-        -- 에러 표시
-        local errMsg = "no data"
+        -- 로딩 vs 에러 구분
+        local errMsg = "loading..."
+        local errColor = colorLoading
+
         if data and data.error then
             if data.error:find("Opening page") then
                 errMsg = "loading..."
-            elseif data.error:find("Safari not running") then
-                errMsg = "Safari off"
-            elseif data.error:find("Wrong page") then
-                errMsg = "wrong page"
+                errColor = colorLoading
             else
+                -- 실제 에러
                 errMsg = "error"
+                errColor = colorError
             end
+        elseif data and not data.sessionPercent then
+            -- 데이터 불완전 (로딩 중)
+            errMsg = "loading..."
+            errColor = colorLoading
+        elseif not data then
+            -- JSON 파일 없음 (초기 로딩)
+            errMsg = "loading..."
+            errColor = colorLoading
         end
 
         canvasCurrent[3].text = errMsg
-        canvasCurrent[3].textColor = colorError
+        canvasCurrent[3].textColor = errColor
 
         canvasWeekly[3].text = errMsg
-        canvasWeekly[3].textColor = colorError
+        canvasWeekly[3].textColor = errColor
     end
 end
 
