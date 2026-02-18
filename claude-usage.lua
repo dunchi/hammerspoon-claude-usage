@@ -8,12 +8,35 @@ local canvasCurrent = nil
 local canvasWeekly = nil
 local updateTimer = nil
 local fetchTimer = nil
+local wakeWatcher = nil
 local JSON_PATH = os.getenv("HOME") .. "/.claude-usage.json"
 local SCRIPT_PATH = os.getenv("HOME") .. "/.local/bin/claude-usage.sh"
+local SESSION_NAME = "claude-usage"
 
 -- 사용량 데이터 가져오기 (sh 스크립트 실행)
 local function fetchUsage()
     hs.task.new(SCRIPT_PATH, nil):start()
+end
+
+-- tmux 세션 강제 재시작
+local function restartSession()
+    -- tmux 세션 종료
+    hs.execute("/opt/homebrew/bin/tmux kill-session -t " .. SESSION_NAME .. " 2>/dev/null", true)
+    -- 에러 카운트 리셋
+    hs.execute("echo 0 > " .. os.getenv("HOME") .. "/.claude-usage-error-count", true)
+    -- JSON 삭제 (loading 상태로 전환)
+    os.remove(JSON_PATH)
+    -- 새 세션 시작
+    fetchUsage()
+end
+
+-- macOS wake 이벤트 핸들러
+local function handleWakeEvent(event)
+    if event == hs.caffeinate.watcher.systemDidWake then
+        hs.timer.doAfter(2, function()
+            restartSession()
+        end)
+    end
 end
 
 -- JSON 파일 읽기
@@ -162,8 +185,8 @@ function M.start()
         canvasWeekly:delete()
     end
 
-    -- 이전 데이터 삭제 (loading 상태로 시작)
-    os.remove(JSON_PATH)
+    -- 기존 tmux 세션 종료 후 새로 시작
+    restartSession()
 
     createWidgets()
     canvasCurrent:show()
@@ -180,8 +203,15 @@ function M.start()
     if fetchTimer then
         fetchTimer:stop()
     end
-    fetchUsage()  -- 즉시 한번 실행
+    -- restartSession()에서 이미 fetchUsage() 호출됨
     fetchTimer = hs.timer.doEvery(30, fetchUsage)
+
+    -- wake 이벤트 감지
+    if wakeWatcher then
+        wakeWatcher:stop()
+    end
+    wakeWatcher = hs.caffeinate.watcher.new(handleWakeEvent)
+    wakeWatcher:start()
 end
 
 -- 중지
@@ -193,6 +223,10 @@ function M.stop()
     if fetchTimer then
         fetchTimer:stop()
         fetchTimer = nil
+    end
+    if wakeWatcher then
+        wakeWatcher:stop()
+        wakeWatcher = nil
     end
     if canvasCurrent then
         canvasCurrent:hide()

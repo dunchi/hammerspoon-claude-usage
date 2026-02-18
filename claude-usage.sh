@@ -8,6 +8,36 @@ export PATH="/opt/homebrew/bin:/Users/hanju/.local/bin:$PATH"
 
 OUTPUT_FILE="$HOME/.claude-usage.json"
 SESSION_NAME="claude-usage"
+ERROR_COUNT_FILE="$HOME/.claude-usage-error-count"
+MAX_ERROR_COUNT=6
+
+# 에러 카운트 읽기
+get_error_count() {
+    if [[ -f "$ERROR_COUNT_FILE" ]]; then
+        cat "$ERROR_COUNT_FILE"
+    else
+        echo 0
+    fi
+}
+
+# 에러 카운트 증가
+increment_error_count() {
+    local count
+    count=$(get_error_count)
+    echo $((count + 1)) > "$ERROR_COUNT_FILE"
+}
+
+# 에러 카운트 리셋
+reset_error_count() {
+    echo 0 > "$ERROR_COUNT_FILE"
+}
+
+# 세션 강제 재시작
+force_restart_session() {
+    tmux kill-session -t "$SESSION_NAME" 2>/dev/null
+    reset_error_count
+    # 새 세션은 ensure_session에서 생성됨
+}
 
 # tmux 세션 확인 및 생성
 ensure_session() {
@@ -230,7 +260,22 @@ EOF
 }
 
 # 메인
+
+# 연속 에러 체크 및 세션 재시작
+error_count=$(get_error_count)
+if [[ $error_count -ge $MAX_ERROR_COUNT ]]; then
+    force_restart_session
+fi
+
 ensure_session
 output=$(get_usage)
 result=$(parse_usage "$output")
+
+# 에러 여부에 따라 카운트 관리
+if echo "$result" | grep -q '"error"'; then
+    increment_error_count
+else
+    reset_error_count
+fi
+
 echo "$result" > "$OUTPUT_FILE"
