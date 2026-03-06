@@ -199,12 +199,12 @@ function M.start()
     end
     updateTimer = hs.timer.doEvery(10, updateWidget)
 
-    -- 데이터 수집 타이머 (30초마다)
+    -- 데이터 수집 타이머 (2분마다)
     if fetchTimer then
         fetchTimer:stop()
     end
     -- restartSession()에서 이미 fetchUsage() 호출됨
-    fetchTimer = hs.timer.doEvery(30, fetchUsage)
+    fetchTimer = hs.timer.doEvery(120, fetchUsage)
 
     -- wake 이벤트 감지
     if wakeWatcher then
